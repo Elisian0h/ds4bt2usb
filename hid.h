@@ -20,7 +20,6 @@
 #include <linux/usbdevice_fs.h>
 #include <linux/usb/ch9.h>
 #include <linux/hid.h>
-#include <libusb.h>
 
 #include <cstdint>
 #include <thread>
@@ -100,6 +99,7 @@ public:
     virtual void hid_set_feature(uint8_t report_number, uint8_t interface_number, uint8_t len, uint8_t *in) = 0;
 
     virtual void hid_send_report(dualsense_output_report_common report) = 0;
+    virtual void hid_send_report_bt(uint8_t* buf) = 0;
 
     virtual void search_for_device() = 0;
     virtual void stop_device_search() = 0;

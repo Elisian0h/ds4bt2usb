@@ -17,14 +17,16 @@ public:
     void hid_set_feature(uint8_t report_number, uint8_t interface_number, uint8_t len, uint8_t *in) override;
 
     void hid_send_report(dualsense_output_report_common report) override;
+    void hid_send_report_bt(uint8_t* buf) override;
 
     void search_for_device() override;
     void stop_device_search() override;
     void process_device_events() override;
 
-    void set_device(libusb_device *device) { m_device = device; }
+    void set_hidraw_path(const std::string& path) { m_hidraw_path = path; }
 
 private:
-    libusb_device *m_device;
-    libusb_device_handle *m_device_handle;
+    std::string m_hidraw_path;
+    int m_hidraw_fd = -1;
+    int m_event_fd = -1;
 };

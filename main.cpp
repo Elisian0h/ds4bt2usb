@@ -35,8 +35,7 @@
 #include <linux/usb/functionfs.h>
 #include <linux/hid.h>
 #include <linux/hidraw.h>
-
-#include <libusb.h>
+#include <linux/uhid.h>
 
 #include "senseshock.h"
 #include "usbhid.h"
@@ -100,23 +99,10 @@ DualShockEmulator::~DualShockEmulator()
         ::close(ep2_out_fd);
 
     if (m_functionfs_setup) {
-        // Detach the virtual USB device
-        write_to_file("UDC", "");
-
-        // Remove the strings
-        ::rmdir((gadget_path + "/strings/0x409").c_str());
-
-        ::umount("/dev/ffs-hidemu0");
-        ::rmdir("/dev/ffs-hidemu0");
-
-        ::remove((gadget_path + "/configs/c.1/ffs.hidemu0").c_str());
-        ::rmdir((gadget_path + "/configs/c.1").c_str());
-
-        // Get rid of the functions and configs
-        ::rmdir((gadget_path + "/functions/ffs.hidemu0").c_str());
-
-        // And finally, nuke the gadget
-        ::rmdir(gadget_path.c_str());
+        struct uhid_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = UHID_DESTROY;
+        ::write(ep0_fd, &ev, sizeof(ev));
     }
 
     delete m_hid;
@@ -180,6 +166,19 @@ int DualShockEmulator::handle_get_report(uint8_t report_id, uint8_t *buffer)
     return 1;
 }
 
+void DualShockEmulator::uhid_send_input(uint8_t* buf, size_t size)
+{
+    if (ep0_fd < 0) return;
+
+    struct uhid_event in_ev;
+    memset(&in_ev, 0, sizeof(in_ev));
+    in_ev.type = UHID_INPUT2;
+    in_ev.u.input2.size = size;
+    memcpy(in_ev.u.input2.data, buf, size);
+
+    ::write(ep0_fd, &in_ev, sizeof(in_ev));
+}
+
 int DualShockEmulator::handle_set_report(uint8_t *buffer, size_t length)
 {
     dualshock4_output_report *in_report = (dualshock4_output_report *)buffer;
@@ -207,91 +206,32 @@ int DualShockEmulator::handle_set_report(uint8_t *buffer, size_t length)
 
 void DualShockEmulator::setup_ep0(void)
 {
-    uint8_t buffer[2048];
-    uint8_t *p = buffer;
     int ret;
-
-    // Create the gadget
-    ::mkdir(gadget_path.c_str(), 0755);
-
-    write_to_file("idVendor", "0x054c"); // Sony Corp
-    write_to_file("idProduct", "0x09cc"); // DualShock 4
-    write_to_file("bcdDevice", "0x0100");
-    write_to_file("bcdUSB", "0x0200");
-    write_to_file("bDeviceClass", "0x00");
-    write_to_file("bDeviceSubClass", "0x00");
-    write_to_file("bDeviceProtocol", "0x00");
-    write_to_file("bMaxPacketSize0", "255");
-
-    ::mkdir((gadget_path + "/strings/0x409").c_str(), 0755);
-    write_to_file("strings/0x409/manufacturer", "Sony Interactive Entertainment");
-    write_to_file("strings/0x409/product", "Wireless Controller");
-    write_to_file("strings/0x409/serialnumber", "DS4EMU001");
-
-    /* Setup a FunctionFS now. */
-    if ((ret = ::mkdir((gadget_path + "/functions/ffs.hidemu0").c_str(), 0755)) < 0) {
-        std::cerr << "Failed to create functionfs! " << errno << '\n';
-        return;
-    }
-    ::mkdir((gadget_path + "/configs/c.1").c_str(), 0755);
-    if ((ret = ::symlink((gadget_path + "/functions/ffs.hidemu0").c_str(), (gadget_path + "/configs/c.1/ffs.hidemu0").c_str())) < 0) {
-        std::cerr << "Failed to link function to config " << errno << "\n";
-        return;
-    }
-    ::mkdir("/dev/ffs-hidemu0", 0755);
-    ::mount("hidemu0", "/dev/ffs-hidemu0", "functionfs", 0, NULL);
-
-    /* Now we're ready to open ep0 */
-    ep0_fd = ::open("/dev/ffs-hidemu0/ep0", O_RDWR|O_SYNC);
+    ep0_fd = ::open("/dev/uhid", O_RDWR);
     if (ep0_fd < 0) {
-        std::cerr << "Failed to open gadgetfs at " << gadget_path << "\n";
+        std::cerr << "Failed to open /dev/uhid\n";
         return;
     }
 
-    functionfs_descriptor descriptors = {
-        .header = {
-            .magic = htole32(FUNCTIONFS_DESCRIPTORS_MAGIC_V2),
-            .length = htole32(sizeof(descriptors)),
-            .flags = FUNCTIONFS_HAS_FS_DESC | FUNCTIONFS_HAS_HS_DESC,
-        },
-        .fs_count = htole32(4),
-        .hs_count = htole32(4),
-        .descs = {
-            // FS Descriptors
-            {
-                .intf = m_hid_interface,
-                .hid = m_hid_desc,
-                .ep_in = m_ep_in,
-                .ep_out = m_ep_out,
-            },
-            // HS Descriptors
-            {
-                .intf = m_hid_interface,
-                .hid = m_hid_desc,
-                .ep_in = m_ep_in,
-                .ep_out = m_ep_out,
-            },
-        },
-    };
+    struct uhid_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = UHID_CREATE2;
+    strncpy((char*)ev.u.create2.name, "Wireless Controller", sizeof(ev.u.create2.name) - 1);
+    strncpy((char*)ev.u.create2.phys, "ds4usb/virtual", sizeof(ev.u.create2.phys) - 1);
+    ev.u.create2.rd_size = sizeof(descs);
+    ev.u.create2.bus = BUS_USB;
+    ev.u.create2.vendor = 0x054c;
+    ev.u.create2.product = 0x09cc;
+    ev.u.create2.version = 0x0100;
+    ev.u.create2.country = 0;
+    memcpy(ev.u.create2.rd_data, descs, sizeof(descs));
 
-    /* Copy all the structs to the buffer. */
-    if ((ret = ::write(ep0_fd, &descriptors, sizeof(descriptors))) < 0) {
-        std::cerr << "Failed to write descriptors to ep0\n";
+    if (::write(ep0_fd, &ev, sizeof(ev)) < 0) {
+        std::cerr << "Failed to create uhid device\n";
         return;
     }
-
-    if ((ret = ::write(ep0_fd, &strings, sizeof(strings))) < 0) {
-        std::cerr << "Failed to write strings to ep0 " << errno << "\n";
-        return;
-    }
-
-    write_to_file("UDC", "dummy_udc.0");
 
     m_functionfs_setup = true;
-
-    m_control_thread_running = true;
-    m_control_thread = std::thread(&DualShockEmulator::handle_control_request, this);
-    m_control_thread.detach();
 
     /* Initialize endpoints and start I/O thread */
     init_ep();
@@ -302,99 +242,27 @@ void DualShockEmulator::setup_ep0(void)
 
 int DualShockEmulator::init_ep()
 {
-    ep1_in_fd = ::open("/dev/ffs-hidemu0/ep1", O_RDWR);
-    ep2_out_fd = ::open("/dev/ffs-hidemu0/ep2", O_RDWR);
-
+    // ep1 and ep2 are not used in uhid
     return 0;
-}
-
-void DualShockEmulator::handle_control_request(void)
-{
-    int ret, i;
-    fd_set read_set;
-    struct usb_functionfs_event event;
-
-    while (m_control_thread_running)
-    {
-        FD_ZERO(&read_set);
-        FD_SET(ep0_fd, &read_set);
-
-        ::select(ep0_fd+1, &read_set, NULL, NULL, NULL);
-
-        ret = ::read(ep0_fd, &event, sizeof(event));
-        if (ret < 0) {
-            return;
-        }
-
-        switch (event.type)
-        {
-        case FUNCTIONFS_ENABLE:
-        case FUNCTIONFS_DISABLE:
-            break;
-        case FUNCTIONFS_SETUP:
-            handle_setup_request(&event.u.setup);
-            break;
-        }
-    }
-}
-
-void DualShockEmulator::handle_setup_request(usb_ctrlrequest* setup)
-{
-    int status;
-    uint8_t buffer[512];
-
-    switch (setup->bRequestType)
-    {
-    case (USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_INTERFACE):
-        switch (setup->bRequest)
-        {
-        case USB_REQ_GET_DESCRIPTOR:
-            if ((setup->wValue >> 8) == HID_DT_REPORT)
-            {
-                ::write(ep0_fd, descs, 507);
-                return;
-            }
-        }
-    case (USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE):
-        switch (setup->bRequest)
-        {
-        case HID_REQ_GET_REPORT:
-            // Send empty report
-            status = handle_get_report((setup->wValue & 0xff), buffer);
-            ::write(ep0_fd, buffer, status);
-            return;
-        }
-
-        break;
-    case (USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE):
-        switch (setup->bRequest)
-        {
-        case HID_REQ_SET_IDLE:
-            // ACK
-            status = ::read(ep0_fd, &status, 0);
-            buffer[0] = 0;
-            ::write(ep0_fd, buffer, 1);
-            return;
-        case HID_REQ_SET_REPORT:
-            // This is most likely wrong, but it works so I don't care :D
-            status = ::read(ep0_fd, buffer, setup->wLength);
-            m_hid->hid_set_feature(buffer[0], 3, setup->wLength, buffer);
-            return;
-        }
-    }
 }
 
 void DualShockEmulator::do_io(void)
 {
-    uint8_t buffer[64];
-    int ret;
+    struct uhid_event out_ev;
 
     while (m_io_thread_running)
     {
-        // Read from OUT endpoint
-        ret = ::read(ep2_out_fd, buffer, sizeof(buffer));
+        // Read from uhid fd
+        int ret = ::read(ep0_fd, &out_ev, sizeof(out_ev));
         if (ret > 0) {
-            handle_set_report(buffer, ret);
+            if (out_ev.type == UHID_OUTPUT) {
+                uint8_t* uhid_out = out_ev.u.output.data;
+                uint16_t size = out_ev.u.output.size;
+
+                if (size == 32 && uhid_out[0] == 0x05) {
+                    m_hid->hid_send_report_bt(uhid_out);
+                }
+            }
         }
     }
 }
@@ -406,8 +274,13 @@ void signal_handler(int signum)
     s_running = false;
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " /dev/hidrawX\n";
+        return 1;
+    }
+
     struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
     sa.sa_flags = SA_RESTART;
@@ -419,6 +292,7 @@ int main(void)
     DualShockEmulator *emulator = new DualShockEmulator();
     UsbHidEmulator *usb_hid = new UsbHidEmulator(emulator);
 
+    usb_hid->set_hidraw_path(argv[1]);
     usb_hid->search_for_device();
 
     while (!emulator->dualsense_setup && s_running) {

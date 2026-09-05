@@ -21,6 +21,18 @@
 #include <sys/ioctl.h>
 #include <cstring>
 #include <iostream>
+#include <linux/input.h>
+
+// Standard IEEE 802.3 CRC32
+static uint32_t crc32_le(uint32_t crc, const uint8_t *p, size_t len) {
+    crc = ~crc;
+    while (len--) {
+        crc ^= *p++;
+        for (int i = 0; i < 8; i++)
+            crc = (crc >> 1) ^ ((crc & 1) ? 0xEDB88320 : 0);
+    }
+    return ~crc;
+}
 
 // Opens a raw USB interface and exchanges HID packets
 UsbHidEmulator::UsbHidEmulator(DualShockEmulator *emulator):
@@ -30,114 +42,117 @@ UsbHidEmulator::UsbHidEmulator(DualShockEmulator *emulator):
 
 UsbHidEmulator::~UsbHidEmulator()
 {
-    if (m_device_handle) {
-        libusb_release_interface(m_device_handle, 3);
-        libusb_close(m_device_handle);
+    if (m_hidraw_fd >= 0) {
+        ::close(m_hidraw_fd);
+        m_hidraw_fd = -1;
     }
-
-    libusb_exit(NULL);
-
-    m_device_handle = nullptr;
+    if (m_event_fd >= 0) {
+        ::close(m_event_fd);
+        m_event_fd = -1;
+    }
 }
 
 void UsbHidEmulator::start(int output_fd)
 {
     m_out_fd = output_fd;
 
-    if (!libusb_open(m_device, &m_device_handle)) {
-        // Successfully opened
-        std::cout << "Opened libusb device for HID emulation\n";
-        libusb_set_auto_detach_kernel_driver(m_device_handle, 1);
-        libusb_claim_interface(m_device_handle, 3); // HID interface is at interface 3
+    m_hidraw_fd = ::open(m_hidraw_path.c_str(), O_RDWR);
+    if (m_hidraw_fd >= 0) {
+        std::cout << "Opened hidraw device for HID emulation\n";
+
+        // Setup EVIOCGRAB on corresponding event node
+        // hidraw_path is e.g. /dev/hidrawX
+        // the sysfs path is /sys/class/hidraw/hidrawX/device/input
+        std::string hidraw_name = m_hidraw_path.substr(m_hidraw_path.find_last_of('/') + 1);
+        std::string sysfs_input_dir = "/sys/class/hidraw/" + hidraw_name + "/device/input";
+
+        // Find the event node inside the input directory
+        std::string event_node = "";
+        FILE* fp = popen(("find " + sysfs_input_dir + " -name \"event*\" 2>/dev/null").c_str(), "r");
+        if (fp) {
+            char path[1024];
+            if (fgets(path, sizeof(path), fp) != NULL) {
+                // Remove trailing newline
+                path[strcspn(path, "\r\n")] = 0;
+                // find returns the full sysfs path, we just want the 'eventX' portion
+                std::string full_path(path);
+                std::string event_name = full_path.substr(full_path.find_last_of('/') + 1);
+                event_node = std::string("/dev/input/") + event_name;
+            }
+            pclose(fp);
+        }
+
+        if (!event_node.empty()) {
+            int event_fd = ::open(event_node.c_str(), O_RDWR);
+            if (event_fd >= 0) {
+                if (ioctl(event_fd, EVIOCGRAB, 1) == 0) {
+                    std::cout << "Successfully grabbed event node " << event_node << " with EVIOCGRAB\n";
+                    // Need to keep event_fd open to maintain grab
+                    m_event_fd = event_fd;
+                } else {
+                    std::cerr << "Failed to EVIOCGRAB on " << event_node << "\n";
+                    ::close(event_fd);
+                }
+            } else {
+                std::cerr << "Failed to open event node " << event_node << "\n";
+            }
+        } else {
+            std::cerr << "Could not find corresponding event node for " << m_hidraw_path << "\n";
+        }
+
     } else {
-        m_device_handle = nullptr;
+        std::cerr << "Failed to open hidraw device\n";
     }
 }
 
 void UsbHidEmulator::hid_get_feature(uint8_t report_number, uint8_t interface_number, uint8_t len, uint8_t *out)
 {
-    libusb_control_transfer(
-        m_device_handle,
-        LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE,
-        HID_REQ_GET_REPORT,
-        (HID_FEATURE_REPORT + 1) << 8 | report_number,
-        interface_number,
-        out,
-        len,
-        1000
-    );
+    // Unused in BT mode but kept to satisfy interface
 }
 
 void UsbHidEmulator::hid_set_feature(uint8_t report_number, uint8_t interface_number, uint8_t len, uint8_t *in)
 {
-    libusb_control_transfer(
-        m_device_handle,
-        LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE,
-        HID_REQ_SET_REPORT,
-        (HID_FEATURE_REPORT + 1) << 8 | report_number,
-        interface_number,
-        in,
-        len,
-        1000
-    );
+    // Unused in BT mode but kept to satisfy interface
 }
 
 void UsbHidEmulator::hid_send_report(dualsense_output_report_common report)
 {
-    // HID_OUTPUT_REPORT is over the OUT endpoint
-    dualsense_output_report_usb out = {0};
-    std::memcpy(&out.common, &report, sizeof(dualsense_output_report_common));
-    out.report_id = 0x02;
-
-    int written = 0;
-    libusb_interrupt_transfer(
-        m_device_handle,
-        0x03, // OUT endpoint 3
-        (uint8_t*)&out,
-        sizeof(out),
-        &written,
-        1000
-    );
+    // Unused in BT mode but kept to satisfy interface
 }
 
-static libusb_hotplug_callback_handle s_cb_handle;
-static int usb_hotplug_cb(libusb_context *ctx, libusb_device *device,
-                    libusb_hotplug_event event, void *user_data)
+void UsbHidEmulator::hid_send_report_bt(uint8_t* buf)
 {
-    UsbHidEmulator *emulator = static_cast<UsbHidEmulator *>(user_data);
+    if (m_hidraw_fd < 0) return;
 
-    if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) {
-        struct libusb_device_descriptor desc;
-        libusb_get_device_descriptor(device, &desc);
+    uint8_t bt_out[78];
+    memset(bt_out, 0, sizeof(bt_out));
 
-        // Sony DualSense VID/PID
-        if (desc.idVendor == 0x054c && desc.idProduct == 0x0ce6) {
-            emulator->set_device(device);
-            emulator->get_emulator()->setup_ep0();
-            emulator->get_emulator()->setup_dualsense(emulator);
-        }
-    } else if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT) {
-        // Device disconnected
-        std::cout << "DualSense disconnected\n";
-        libusb_hotplug_deregister_callback(NULL, s_cb_handle);
-        emulator->get_emulator()->dualsense_disconnected();
-        return 1;
-    }
+    bt_out[0] = 0x11;
+    bt_out[1] = 0xc0;
+    bt_out[2] = 0x20;
+    memcpy(bt_out + 3, buf + 1, 31); // skip report id 0x05
 
-    return 0;
+    uint8_t crc_buf[75];
+    crc_buf[0] = 0xA2;
+    memcpy(crc_buf + 1, bt_out, 74);
+
+    uint32_t crc = crc32_le(0, crc_buf, 75);
+
+    bt_out[74] = crc & 0xFF;
+    bt_out[75] = (crc >> 8) & 0xFF;
+    bt_out[76] = (crc >> 16) & 0xFF;
+    bt_out[77] = (crc >> 24) & 0xFF;
+
+    ::write(m_hidraw_fd, bt_out, sizeof(bt_out));
 }
 
 // Starts an asynchronous search for a compatible USB device
 void UsbHidEmulator::search_for_device()
 {
-    libusb_init_context(NULL, NULL, 0);
-
-    if (!libusb_hotplug_register_callback(NULL, 
-            LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT,
-            LIBUSB_HOTPLUG_ENUMERATE,
-            0x054c, 0x0ce6, LIBUSB_HOTPLUG_MATCH_ANY,
-            usb_hotplug_cb, this, &s_cb_handle)) {
-        std::cout << "Registered hotplug callback\n";
+    // Bypassing hotplug logic since hidraw_path is provided via CLI
+    if (!m_hidraw_path.empty()) {
+        get_emulator()->setup_ep0();
+        get_emulator()->setup_dualsense(this);
     }
 }
 
@@ -145,29 +160,20 @@ void UsbHidEmulator::stop_device_search()
 {
 }
 
-static uint8_t s_buffer[64];
-static int s_transferred = 0;
-static struct timeval s_timeval = {0, 0};
+static uint8_t s_buffer[128];
 
 void UsbHidEmulator::process_device_events()
 {
-    libusb_handle_events_timeout(nullptr, &s_timeval);
-
-    if (!m_device_handle)
+    if (m_hidraw_fd < 0)
         return;
 
-    int ret = libusb_interrupt_transfer(
-                m_device_handle,
-                0x84, // IN endpoint 4
-                s_buffer,
-                sizeof(s_buffer),
-                &s_transferred,
-                1000
-            );
+    int ret = ::read(m_hidraw_fd, s_buffer, sizeof(s_buffer));
 
-    if (ret == 0 && s_transferred > 0) {
-        dualsense_input_report *in_report = (dualsense_input_report *)s_buffer;
-        dualshock4_input_report out_report = ds_to_ds4_input(in_report);
-        ::write(m_out_fd, &out_report, dualshock4_input_report_size);
+    if (ret >= 78 && s_buffer[0] == 0x11) {
+        uint8_t uhid_buf[64];
+        uhid_buf[0] = 0x01;
+        memcpy(uhid_buf + 1, s_buffer + 3, 63);
+
+        get_emulator()->uhid_send_input(uhid_buf, sizeof(uhid_buf));
     }
 }

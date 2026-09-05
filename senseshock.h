@@ -3,7 +3,6 @@
 #include <linux/usb/ch9.h>
 #include <linux/usb/functionfs.h>
 #include <linux/hid.h>
-#include <libusb.h>
 
 #include <iostream>
 #include <string>
@@ -52,6 +51,8 @@ public:
     void handle_setup_request(usb_ctrlrequest* setup);
 
     void do_io();
+
+    void uhid_send_input(uint8_t* buf, size_t size);
 
     int get_in_fd() const { return ep1_in_fd; }
     HidEmulator *get_hid() const { return m_hid; }

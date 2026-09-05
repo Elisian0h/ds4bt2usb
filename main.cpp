@@ -122,47 +122,64 @@ void DualShockEmulator::dualsense_disconnected()
 
 int DualShockEmulator::handle_get_report(uint8_t report_id, uint8_t *buffer)
 {
-    // Handle the reportID's and send appropriate responses
-
     std::cout << "Handling get_report for report ID: " << std::hex << (int)report_id << std::dec << "\n";
 
     switch (report_id) {
-    case DS4_FEATURE_GYRO_CALIBRATION: {
-        std::cout << "Forwarding gyro calibration request to DualSense\n";
-        // Time to delegate this to the DualSense.
-        m_hid->hid_get_feature(DS_FEATURE_GYRO_CALIBRATION, 3, DS_FEATURE_GYRO_CALIBRATION_LEN, buffer);        
-        buffer[0] = DS4_FEATURE_GYRO_CALIBRATION; // Restore report ID
-        return DS4_FEATURE_GYRO_CALIBRATION_LEN;
+        case 0x02: {
+            uint8_t rep[] = {0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x87, 0x22, 0x7B, 0xDD, 0xB2, 0x22, 0x5C, 0xDD, 0x89, 0x22, 0x54, 0xDD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case 0x12: {
+            uint8_t rep[] = {0x12, 0x8B, 0x09, 0x07, 0x6D, 0x66, 0x1C, 0x08, 0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case 0x81: {
+            uint8_t rep[] = {0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case 0x83: {
+            uint8_t rep[] = {0x83, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case 0x84: {
+            uint8_t rep[] = {0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case 0x8B: {
+            uint8_t rep[] = {0x8B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case 0x8C: {
+            uint8_t rep[] = {0x8C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            memcpy(buffer, rep, sizeof(rep));
+            return sizeof(rep);
+        }
+        case DS4_FEATURE_HW_FW_VERSION: {
+            dualshock_feature_report_firmware ds4_firmware;
+            std::memset(&ds4_firmware, 0, sizeof(ds4_firmware));
+
+            ds4_firmware.report_id = DS4_FEATURE_HW_FW_VERSION;
+
+            std::memcpy(ds4_firmware.build_date, ds4_firmware_build_date, sizeof(ds4_firmware_build_date));
+            std::memcpy(ds4_firmware.build_time, ds4_firmware_build_time, sizeof(ds4_firmware_build_time));
+
+            // Needed by some games, e.g. Detroit: Become Human sanity-checks hw_version
+            ds4_firmware.hw_version_major = 0x0100;
+            ds4_firmware.hw_version_minor = 0x6414;
+            ds4_firmware.fw_version_major = 0x00000001;
+            ds4_firmware.fw_version_minor = 0x7007;
+
+            std::memcpy(buffer, &ds4_firmware, sizeof(ds4_firmware));
+
+            return DS4_FEATURE_HW_FW_VERSION_LEN;
+        }
     }
-
-    case DS4_FEATURE_PAIRING_INFO:
-        // Copy the MAC address from the DualSense.
-        std::cout << "Copying pairing info from the DualSense\n";
-        m_hid->hid_get_feature(DS_FEATURE_PAIRING_INFO, 3, DS_FEATURE_PAIRING_INFO_LEN, buffer);
-        buffer[0] = DS4_FEATURE_PAIRING_INFO;
-        return DS4_FEATURE_PAIRING_INFO_LEN;
-
-    case DS4_FEATURE_HW_FW_VERSION: {
-        dualshock_feature_report_firmware ds4_firmware;
-        std::memset(&ds4_firmware, 0, sizeof(ds4_firmware));
-
-        ds4_firmware.report_id = DS4_FEATURE_HW_FW_VERSION;
-
-        std::memcpy(ds4_firmware.build_date, ds4_firmware_build_date, sizeof(ds4_firmware_build_date));
-        std::memcpy(ds4_firmware.build_time, ds4_firmware_build_time, sizeof(ds4_firmware_build_time));
-
-        // Needed by some games, e.g. Detroit: Become Human sanity-checks hw_version
-        ds4_firmware.hw_version_major = 0x0100;
-        ds4_firmware.hw_version_minor = 0x6414;
-        ds4_firmware.fw_version_major = 0x00000001;
-        ds4_firmware.fw_version_minor = 0x7007;
-
-        std::memcpy(buffer, &ds4_firmware, sizeof(ds4_firmware));
-
-        return DS4_FEATURE_HW_FW_VERSION_LEN;
-    }
-    }
-
     return 1;
 }
 
@@ -218,13 +235,13 @@ void DualShockEmulator::setup_ep0(void)
     ev.type = UHID_CREATE2;
     strncpy((char*)ev.u.create2.name, "Wireless Controller", sizeof(ev.u.create2.name) - 1);
     strncpy((char*)ev.u.create2.phys, "ds4usb/virtual", sizeof(ev.u.create2.phys) - 1);
-    ev.u.create2.rd_size = sizeof(descs);
+    ev.u.create2.rd_size = 501;
     ev.u.create2.bus = BUS_USB;
     ev.u.create2.vendor = 0x054c;
     ev.u.create2.product = 0x09cc;
     ev.u.create2.version = 0x0100;
     ev.u.create2.country = 0;
-    memcpy(ev.u.create2.rd_data, descs, sizeof(descs));
+    memcpy(ev.u.create2.rd_data, descs, 501);
 
     if (::write(ep0_fd, &ev, sizeof(ev)) < 0) {
         std::cerr << "Failed to create uhid device\n";
@@ -262,6 +279,26 @@ void DualShockEmulator::do_io(void)
                 if (size == 32 && uhid_out[0] == 0x05) {
                     m_hid->hid_send_report_bt(uhid_out);
                 }
+            } else if (out_ev.type == UHID_GET_REPORT) {
+                struct uhid_event reply;
+                memset(&reply, 0, sizeof(reply));
+                reply.type = UHID_GET_REPORT_REPLY;
+                reply.u.get_report_reply.id = out_ev.u.get_report.id;
+
+                uint8_t buf[UHID_DATA_MAX];
+                memset(buf, 0, sizeof(buf));
+                int size = handle_get_report(out_ev.u.get_report.rnum, buf);
+
+                if (size > 1) {
+                    reply.u.get_report_reply.err = 0;
+                    reply.u.get_report_reply.size = size;
+                    memcpy(reply.u.get_report_reply.data, buf, size);
+                } else {
+                    reply.u.get_report_reply.err = 1;
+                    reply.u.get_report_reply.size = 0;
+                }
+
+                ::write(ep0_fd, &reply, sizeof(reply));
             }
         }
     }

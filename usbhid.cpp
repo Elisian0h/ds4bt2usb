@@ -22,6 +22,7 @@
 #include <cstring>
 #include <iostream>
 #include <linux/input.h>
+#include <filesystem>
 
 // Standard IEEE 802.3 CRC32
 static uint32_t crc32_le(uint32_t crc, const uint8_t *p, size_t len) {
@@ -66,20 +67,20 @@ void UsbHidEmulator::start(int output_fd)
         std::string hidraw_name = m_hidraw_path.substr(m_hidraw_path.find_last_of('/') + 1);
         std::string sysfs_input_dir = "/sys/class/hidraw/" + hidraw_name + "/device/input";
 
-        // Find the event node inside the input directory
+        // Find the event node inside the input directory safely using filesystem API
         std::string event_node = "";
-        FILE* fp = popen(("find " + sysfs_input_dir + " -name \"event*\" 2>/dev/null").c_str(), "r");
-        if (fp) {
-            char path[1024];
-            if (fgets(path, sizeof(path), fp) != NULL) {
-                // Remove trailing newline
-                path[strcspn(path, "\r\n")] = 0;
-                // find returns the full sysfs path, we just want the 'eventX' portion
-                std::string full_path(path);
-                std::string event_name = full_path.substr(full_path.find_last_of('/') + 1);
-                event_node = std::string("/dev/input/") + event_name;
+        try {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(sysfs_input_dir)) {
+                if (entry.is_directory()) {
+                    std::string dir_name = entry.path().filename().string();
+                    if (dir_name.find("event") == 0) { // Check if dir_name starts with "event"
+                        event_node = "/dev/input/" + dir_name;
+                        break;
+                    }
+                }
             }
-            pclose(fp);
+        } catch (const std::filesystem::filesystem_error& e) {
+            std::cerr << "Filesystem error while finding event node: " << e.what() << "\n";
         }
 
         if (!event_node.empty()) {
